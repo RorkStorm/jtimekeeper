@@ -1,10 +1,7 @@
 package net.fonteyne.jtimekeeper;
 
-import com.sun.jna.Memory;
-import com.sun.jna.Native;
-import com.sun.jna.platform.win32.Kernel32;
+import com.sun.jna.Pointer;
 import com.sun.jna.platform.win32.User32;
-import com.sun.jna.platform.win32.WinDef.DWORD;
 import com.sun.jna.platform.win32.Wtsapi32;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.PointerByReference;
@@ -29,42 +26,70 @@ public class WindowsUserManager {
         IntByReference bytesReturned = new IntByReference();
         String username = "SYSTEM";
 
+        Pointer p = null;
         try {
-            // Récupérer le nom d'utilisateur
             boolean success = Wtsapi32.INSTANCE.WTSQuerySessionInformation(
-                Wtsapi32.WTS_CURRENT_SERVER_HANDLE,
-                sessionId,
-                Wtsapi32.WTS_INFO_CLASS.WTSUserName,
-                bufferRef,
-                bytesReturned
+                    Wtsapi32.WTS_CURRENT_SERVER_HANDLE,
+                    sessionId,
+                    Wtsapi32.WTS_INFO_CLASS.WTSUserName,
+                    bufferRef,
+                    bytesReturned
             );
 
-            if (success && bytesReturned.getValue() > 1) {
-                username = bufferRef.getValue().getString(0);
-                Wtsapi32.INSTANCE.WTSFreeMemory(bufferRef.getValue());
-
-                // Si demandé, préfixer avec le domaine
-                if (prependDomain) {
-                    bufferRef = new PointerByReference();
-                    bytesReturned = new IntByReference();
-                    
-                    success = Wtsapi32.INSTANCE.WTSQuerySessionInformation(
-                        Wtsapi32.WTS_CURRENT_SERVER_HANDLE,
-                        sessionId,
-                        Wtsapi32.WTS_INFO_CLASS.WTSDomainName,
-                        bufferRef,
-                        bytesReturned
-                    );
-
-                    if (success && bytesReturned.getValue() > 1) {
-                        String domain = bufferRef.getValue().getString(0);
-                        username = domain + "\\" + username;
-                        Wtsapi32.INSTANCE.WTSFreeMemory(bufferRef.getValue());
-                    }
+            p = bufferRef.getValue();
+            if (success && p != null && bytesReturned.getValue() > 0) {
+                // WTS renvoie des wchar_t*, lire en Unicode
+                String user = p.getWideString(0);
+                if (user != null && !user.isEmpty()) {
+                    username = user;
                 }
             }
         } catch (Exception ex) {
-            logger.error("Error getting username for session {}: {}", sessionId, ex.getMessage());
+            logger.error("Error getting username for session {}: {}", sessionId, ex.getMessage(), ex);
+        } finally {
+            // Toujours libérer si on a reçu un pointeur non nul
+            try {
+                Pointer got = bufferRef.getValue();
+                if (got != null) {
+                    Wtsapi32.INSTANCE.WTSFreeMemory(got);
+                }
+            } catch (Throwable t) {
+                logger.warn("Failed to free WTS memory: {}", t.getMessage(), t);
+            }
+        }
+
+        if (prependDomain) {
+            // récupérer le domaine et préfixer si possible
+            PointerByReference domainRef = new PointerByReference();
+            IntByReference domainBytes = new IntByReference();
+            Pointer pd = null;
+            try {
+                boolean success = Wtsapi32.INSTANCE.WTSQuerySessionInformation(
+                        Wtsapi32.WTS_CURRENT_SERVER_HANDLE,
+                        sessionId,
+                        Wtsapi32.WTS_INFO_CLASS.WTSDomainName,
+                        domainRef,
+                        domainBytes
+                );
+                pd = domainRef.getValue();
+                if (success && pd != null && domainBytes.getValue() > 0) {
+                    String domain = pd.getWideString(0);
+                    if (domain != null && !domain.isEmpty()) {
+                        username = domain + "\\" + username;
+                    }
+                }
+            } catch (Exception ex) {
+                logger.error("Error getting domain for session {}: {}", sessionId, ex.getMessage(), ex);
+            } finally {
+                try {
+                    Pointer got = domainRef.getValue();
+                    if (got != null) {
+                        Wtsapi32.INSTANCE.WTSFreeMemory(got);
+                    }
+                } catch (Throwable t) {
+                    logger.warn("Failed to free WTS memory for domain: {}", t.getMessage(), t);
+                }
+            }
         }
 
         return username;
