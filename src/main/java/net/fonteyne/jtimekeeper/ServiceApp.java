@@ -1,4 +1,3 @@
-
 package net.fonteyne.jtimekeeper;
 
 import org.slf4j.Logger;

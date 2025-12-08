@@ -1,17 +1,19 @@
 package net.fonteyne.jtimekeeper;
-import java.util.*;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 class TimeCounter {
-    private Date Day;
+    private LocalDate Day;
     private int Minutes;
     private int DefaultMinutes;
-    private Date LastLogOn;
+    private LocalDateTime LastLogOn;
 
-    public void setDay(Date day) {
+    public void setDay(LocalDate day) {
         this.Day = day;
     }
 
-    public Date getDay() {
+    public LocalDate getDay() {
         return this.Day;
     }
 
@@ -31,11 +33,11 @@ class TimeCounter {
         return this.DefaultMinutes;
     }
 
-    public void setLastLogOn(Date lastLogOn) {
+    public void setLastLogOn(LocalDateTime lastLogOn) {
         this.LastLogOn = lastLogOn;
     }
 
-    public Date getLastLogOn() {
+    public LocalDateTime getLastLogOn() {
         return this.LastLogOn;
     }
 

@@ -3,7 +3,6 @@ package net.fonteyne.jtimekeeper;
 
 import com.sun.jna.WString;
 import com.sun.jna.platform.win32.Kernel32;
-import com.sun.jna.platform.win32.User32;
 import com.sun.jna.platform.win32.WinDef.HMODULE;
 import com.sun.jna.platform.win32.WinDef.HWND;
 import com.sun.jna.platform.win32.WinDef.LRESULT;
@@ -46,6 +45,7 @@ public class HiddenSessionWindow implements WindowProc {
   private Thread pumpThread;
   private HWND hWnd;
   private WString windowClass = new WString("HiddenSessionWindowClass");
+  private ServiceHelper svcHelper = new ServiceHelper();
 
   public boolean isRunning() { return running; }
 
@@ -55,6 +55,8 @@ public class HiddenSessionWindow implements WindowProc {
     pumpThread = new Thread(this::messageLoop, "win32-msg-loop");
     pumpThread.setDaemon(false);
     pumpThread.start();
+
+    svcHelper.configureUsers();
   }
 
   public void stop() {
@@ -127,11 +129,24 @@ public class HiddenSessionWindow implements WindowProc {
   public LRESULT callback(HWND hwnd, int uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg == WM_WTSSESSION_CHANGE) {
       int code = wParam.intValue();
+      int sessionID = lParam.intValue();
+
+      String currentUser = WindowsUserManager.getUsernameBySessionId(sessionID, false);
+      log.info("Session change detected for user '{}', session ID {}", currentUser, sessionID);
+
       switch (code) {
-        case WTS_SESSION_LOGON:      log.info("WTS_SESSION_LOGON"); break;
-        case WTS_SESSION_LOGOFF:     log.info("WTS_SESSION_LOGOFF"); break;
-        case WTS_SESSION_LOCK:       log.info("WTS_SESSION_LOCK"); break;
-        case WTS_SESSION_UNLOCK:     log.info("WTS_SESSION_UNLOCK"); break;
+        case WTS_SESSION_LOGON:
+          log.info("WTS_SESSION_LOGON");
+          break;
+        case WTS_SESSION_LOGOFF:
+          log.info("WTS_SESSION_LOGOFF");
+          break;
+        case WTS_SESSION_LOCK:
+          log.info("WTS_SESSION_LOCK");
+          break;
+        case WTS_SESSION_UNLOCK:
+          log.info("WTS_SESSION_UNLOCK");
+          break;
         case WTS_CONSOLE_CONNECT:    log.info("WTS_CONSOLE_CONNECT"); break;
         case WTS_CONSOLE_DISCONNECT: log.info("WTS_CONSOLE_DISCONNECT"); break;
         case WTS_REMOTE_CONNECT:     log.info("WTS_REMOTE_CONNECT"); break;
