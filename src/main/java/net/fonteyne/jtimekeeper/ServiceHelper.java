@@ -79,7 +79,7 @@ public class ServiceHelper {
     /**
      * Obtient le répertoire où se trouve le JAR en cours d'exécution
      */
-    private String getJarDirectory() {
+    public String getJarDirectory() {
         try {
             String jarPath = ServiceHelper.class.getProtectionDomain()
                 .getCodeSource()

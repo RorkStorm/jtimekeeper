@@ -90,6 +90,7 @@
                   <directory>src/main/resources</directory>
                   <includes>
                     <include>appsettings.json</include>
+                    <include>Lock.bat</include>
                   </includes>
                   <filtering>false</filtering>
                 </resource>

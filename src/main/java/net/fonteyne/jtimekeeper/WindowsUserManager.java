@@ -103,18 +103,13 @@ public class WindowsUserManager {
      */
     public static boolean forceLogout(int sessionId) {
         try {
-            // Définir le répertoire système comme répertoire courant
-            String systemDir = System.getenv("SystemRoot") + "\\system32";
-            File systemDirectory = new File(systemDir);
-            
-            if (!systemDirectory.exists()) {
-                logger.error("System directory not found: {}", systemDir);
-                return false;
-            }
+
+            ServiceHelper helper = new ServiceHelper();
+            String jarPath = helper.getJarDirectory();
 
             // Option 1: Exécuter Lock.bat
             ProcessBuilder processBuilder = new ProcessBuilder("cmd.exe", "/c", "Lock.bat");
-            processBuilder.directory(systemDirectory);
+            processBuilder.directory(new File(jarPath));
             Process process = processBuilder.start();
             
             int exitCode = process.waitFor();
