@@ -27,20 +27,6 @@ import static com.sun.jna.platform.win32.User32.*;
 public class HiddenSessionWindow implements WindowProc {
   private static final Logger log = LoggerFactory.getLogger(HiddenSessionWindow.class);
 
-  // Code du message envoyé par TS pour les changements de session
-  private static final int WM_WTSSESSION_CHANGE = 0x2B1; // 689
-
-  // Codes WTS (wParam)
-  private static final int WTS_CONSOLE_CONNECT    = 0x1;
-  private static final int WTS_CONSOLE_DISCONNECT = 0x2;
-  private static final int WTS_REMOTE_CONNECT     = 0x3;
-  private static final int WTS_REMOTE_DISCONNECT  = 0x4;
-  private static final int WTS_SESSION_LOGON      = 0x5;
-  private static final int WTS_SESSION_LOGOFF     = 0x6;
-  private static final int WTS_SESSION_LOCK       = 0x7;
-  private static final int WTS_SESSION_UNLOCK     = 0x8;
-  private static final int WTS_SESSION_REMOTE_CONTROL = 0x9;
-
   private volatile boolean running = false;
   private Thread pumpThread;
   private HWND hWnd;
@@ -57,6 +43,9 @@ public class HiddenSessionWindow implements WindowProc {
     pumpThread.start();
 
     svcHelper.configureUsers();
+
+    //To simulate the first LOGON -> to convert into an Integration Test
+    svcHelper.handleSessionChange("Eric", WTSSessionCodes.WTS_SESSION_LOGON, 0);
   }
 
   public void stop() {
@@ -127,7 +116,7 @@ public class HiddenSessionWindow implements WindowProc {
 
   @Override
   public LRESULT callback(HWND hwnd, int uMsg, WPARAM wParam, LPARAM lParam) {
-    if (uMsg == WM_WTSSESSION_CHANGE) {
+    if (uMsg == WTSSessionCodes.WM_WTSSESSION_CHANGE) {
       int code = wParam.intValue();
       int sessionID = lParam.intValue();
 
@@ -135,23 +124,27 @@ public class HiddenSessionWindow implements WindowProc {
       log.info("Session change detected for user '{}', session ID {}", currentUser, sessionID);
 
       switch (code) {
-        case WTS_SESSION_LOGON:
+        case WTSSessionCodes.WTS_SESSION_LOGON:
           log.info("WTS_SESSION_LOGON");
+          svcHelper.handleSessionChange(currentUser, code, sessionID);
           break;
-        case WTS_SESSION_LOGOFF:
+        case WTSSessionCodes.WTS_SESSION_LOGOFF:
           log.info("WTS_SESSION_LOGOFF");
+            svcHelper.handleSessionChange(currentUser, code, sessionID);
           break;
-        case WTS_SESSION_LOCK:
+        case WTSSessionCodes.WTS_SESSION_LOCK:
           log.info("WTS_SESSION_LOCK");
+            svcHelper.handleSessionChange(currentUser, code, sessionID);
           break;
-        case WTS_SESSION_UNLOCK:
+        case WTSSessionCodes.WTS_SESSION_UNLOCK:
           log.info("WTS_SESSION_UNLOCK");
+            svcHelper.handleSessionChange(currentUser, code, sessionID);
           break;
-        case WTS_CONSOLE_CONNECT:    log.info("WTS_CONSOLE_CONNECT"); break;
-        case WTS_CONSOLE_DISCONNECT: log.info("WTS_CONSOLE_DISCONNECT"); break;
-        case WTS_REMOTE_CONNECT:     log.info("WTS_REMOTE_CONNECT"); break;
-        case WTS_REMOTE_DISCONNECT:  log.info("WTS_REMOTE_DISCONNECT"); break;
-        case WTS_SESSION_REMOTE_CONTROL: log.info("WTS_SESSION_REMOTE_CONTROL"); break;
+        case WTSSessionCodes.WTS_CONSOLE_CONNECT:    log.info("WTS_CONSOLE_CONNECT"); break;
+        case WTSSessionCodes.WTS_CONSOLE_DISCONNECT: log.info("WTS_CONSOLE_DISCONNECT"); break;
+        case WTSSessionCodes.WTS_REMOTE_CONNECT:     log.info("WTS_REMOTE_CONNECT"); break;
+        case WTSSessionCodes.WTS_REMOTE_DISCONNECT:  log.info("WTS_REMOTE_DISCONNECT"); break;
+        case WTSSessionCodes.WTS_SESSION_REMOTE_CONTROL: log.info("WTS_SESSION_REMOTE_CONTROL"); break;
         default: log.info("WM_WTSSESSION_CHANGE code={}", code);
       }
       return new LRESULT(0);
@@ -159,4 +152,5 @@ public class HiddenSessionWindow implements WindowProc {
     // Comportement par défaut
     return INSTANCE.DefWindowProc(hwnd, uMsg, wParam, lParam);
   }
+
 }

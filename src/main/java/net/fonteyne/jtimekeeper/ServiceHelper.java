@@ -10,11 +10,10 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
+import java.util.*;
 
 public class ServiceHelper {
     private static final Logger logger = LoggerFactory.getLogger(ServiceHelper.class);
@@ -57,7 +56,7 @@ public class ServiceHelper {
                     counter.setLastLogOn(LocalDateTime.now());
 
                     users.put(key, counter);
-                    logger.debug("Loading User: {} with Values: {}", key, users.get(key));
+                    logger.info("Loading User: {} with Values: {}", key, users.get(key));
                 } catch (NumberFormatException ex) {
                     logger.warn("Invalid number format for user {}: {}", key, value.asText());
                 }
@@ -104,5 +103,82 @@ public class ServiceHelper {
 
     public Map<String, TimeCounter> getUsers() {
         return users;
+    }
+
+    public void handleSessionChange(String currentUser, int WTS_SESSION_EVENT, int sessionId) {
+
+        logger.info("Loading User : {} with Values : {} and Event {}",currentUser, users.get(currentUser), WTS_SESSION_EVENT);
+        Timer timer = new Timer(true);
+
+        if ((WTS_SESSION_EVENT == WTSSessionCodes.WTS_SESSION_LOGON || WTS_SESSION_EVENT == WTSSessionCodes.WTS_SESSION_UNLOCK) && getUsers().containsKey(currentUser)) {
+            // A new session has started
+            logger.info("A new session has started.");
+
+            //If the session starts another day than the Svc startup date, we reset the time counter
+            if (!Objects.equals(getUsers().get(currentUser).getDay(), LocalDate.now())) {
+                logger.info("The service started {} but we are now {} ->reset", getUsers().get(currentUser).getDay(), LocalDate.now());
+                getUsers().get(currentUser).setDay(LocalDate.now());
+                getUsers().get(currentUser).setMinutes(getUsers().get(currentUser).getDefaultMinutes());
+            }
+
+            getUsers().get(currentUser).setLastLogOn(LocalDateTime.now());
+
+            if (checkForKidsLogon(currentUser)) {
+
+                logger.info("Loading User : {} with Values : {}",currentUser, getUsers().get(currentUser));
+
+                 // daemon timer
+                TimeCounter tc = users.get(currentUser);
+                long delayMs = tc.getMinutes() * 60L * 1000L;
+                timer.schedule(new TimerTask() {
+                    @Override
+                    public void run() {
+                        forceLogout(currentUser, sessionId);
+                    }
+                }, delayMs);
+            } else {
+                forceLogout(currentUser, sessionId);
+            }
+        }
+
+        if (getUsers().containsKey(currentUser) && (WTS_SESSION_EVENT == WTSSessionCodes.WTS_SESSION_LOGOFF || WTS_SESSION_EVENT == WTSSessionCodes.WTS_SESSION_UNLOCK))
+        {
+            logger.info("A session is closed or locked");
+            getUsers().get(currentUser).setMinutes(calculateRemainingMinutes(getUsers().get(currentUser)));
+            logger.info("Remaining remaining minutes: {} for User {}", getUsers().get(currentUser).getMinutes(), currentUser);
+            timer.cancel();
+        }
+    }
+
+    private boolean checkForKidsLogon(String currentUser)
+    {
+        if (getUsers().get(currentUser).getMinutes() == 0)
+            return false;
+        else
+            return true;
+    }
+
+    private void forceLogout(String currentUser, int sessionId)
+    {
+        logger.info("Logout operation triggered for User {} and Session : {}", currentUser, sessionId);
+        getUsers().get(currentUser).setMinutes(0);
+
+        boolean result = WindowsUserManager.forceLogout(sessionId, true);
+
+        logger.info("Logout operation status : {}", result);
+    }
+
+    public static int calculateRemainingMinutes(TimeCounter timeCounter) {
+
+        // Date/heure d'expiration = dernière connexion + durée en minutes
+        LocalDateTime expiry = timeCounter.getLastLogOn().plusMinutes(timeCounter.getMinutes());
+
+        // Durée entre maintenant et l'expiration (peut être négative)
+        long remainingMinutes = Duration.between(LocalDateTime.now(), expiry).toMinutes();
+
+        logger.info("Expiry {} - Remaining minutes {}", expiry, remainingMinutes);
+
+        // Retourne 0 si négatif, sinon la valeur en minutes
+        return (int) Math.max(0, remainingMinutes);
     }
 }

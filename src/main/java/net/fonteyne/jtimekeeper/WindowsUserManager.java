@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 
 public class WindowsUserManager {
@@ -101,36 +102,44 @@ public class WindowsUserManager {
      * @param sessionId ID de la session à verrouiller
      * @return true si le verrouillage a réussi, false sinon
      */
-    public static boolean forceLogout(int sessionId) {
-        try {
+    public static boolean forceLogout(int sessionId, boolean debug) {
 
-            ServiceHelper helper = new ServiceHelper();
-            String jarPath = helper.getJarDirectory();
+        if (debug) {
+            logger.info("Forcing logout for session {}", sessionId);
+            return true;
+        }
+        else {
 
-            // Option 1: Exécuter Lock.bat
-            ProcessBuilder processBuilder = new ProcessBuilder("cmd.exe", "/c", "Lock.bat");
-            processBuilder.directory(new File(jarPath));
-            Process process = processBuilder.start();
-            
-            int exitCode = process.waitFor();
-            return exitCode == 0;
+            try {
 
-            // Option 2 (commentée): Utiliser rundll32 pour verrouiller
-            // ProcessBuilder processBuilder = new ProcessBuilder(
-            //     "rundll32.exe", 
-            //     "user32.dll,LockWorkStation"
-            // );
-            // processBuilder.directory(systemDirectory);
-            // Process process = processBuilder.start();
-            // return true;
+                ServiceHelper helper = new ServiceHelper();
+                String jarPath = helper.getJarDirectory();
 
-        } catch (IOException ex) {
-            logger.debug("Failed to lock session: {}", ex.getMessage());
-        } catch (InterruptedException ex) {
-            logger.debug("Lock process interrupted: {}", ex.getMessage());
-            Thread.currentThread().interrupt();
-        } catch (Exception ex) {
-            logger.debug("Failed to lock session: {}", ex.getMessage());
+                // Option 1: Exécuter Lock.bat
+                ProcessBuilder processBuilder = new ProcessBuilder("cmd.exe", "/c", "Lock.bat");
+                processBuilder.directory(new File(jarPath));
+                Process process = processBuilder.start();
+
+                int exitCode = process.waitFor();
+                return exitCode == 0;
+
+                // Option 2 (commentée): Utiliser rundll32 pour verrouiller
+                // ProcessBuilder processBuilder = new ProcessBuilder(
+                //     "rundll32.exe",
+                //     "user32.dll,LockWorkStation"
+                // );
+                // processBuilder.directory(systemDirectory);
+                // Process process = processBuilder.start();
+                // return true;
+
+            } catch (IOException ex) {
+                logger.debug("Failed to lock session: {}", ex.getMessage());
+            } catch (InterruptedException ex) {
+                logger.debug("Lock process interrupted: {}", ex.getMessage());
+                Thread.currentThread().interrupt();
+            } catch (Exception ex) {
+                logger.debug("Failed to lock session: {}", ex.getMessage());
+            }
         }
         
         return false;
