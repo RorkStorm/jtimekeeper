@@ -17,13 +17,6 @@ import org.slf4j.LoggerFactory;
 
 import static com.sun.jna.platform.win32.User32.*;
 
-/**
- * Crée une fenêtre cachée et s'enregistre aux notifications WTS (session change).
- * Réceptionne WM_WTSSESSION_CHANGE et journalise les évènements.
- *
- * Réf. Microsoft: WTSRegisterSessionNotification (fenêtre) et WM_WTSSESSION_CHANGE
- * https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsregistersessionnotification
- */
 public class HiddenSessionWindow implements WindowProc {
   private static final Logger log = LoggerFactory.getLogger(HiddenSessionWindow.class);
 
@@ -51,11 +44,10 @@ public class HiddenSessionWindow implements WindowProc {
   public void stop() {
     try {
       if (hWnd != null) {
-        // Unregister WTS notifications
         Wtsapi32.INSTANCE.WTSUnRegisterSessionNotification(hWnd);
-        // Détruire la fenêtre
+
         INSTANCE.DestroyWindow(hWnd);
-        // Poster un WM_QUIT pour sortir de GetMessage
+
         INSTANCE.PostQuitMessage(0);
       }
     } catch (Throwable t) {
@@ -67,7 +59,7 @@ public class HiddenSessionWindow implements WindowProc {
 
   private void messageLoop() {
     try {
-      // Enregistrer la classe de fenêtre
+
       HMODULE hInst = Kernel32.INSTANCE.GetModuleHandle("");
       WNDCLASSEX wClass = new WNDCLASSEX();
       wClass.hInstance = hInst;
@@ -78,7 +70,6 @@ public class HiddenSessionWindow implements WindowProc {
         running = false; return;
       }
 
-      // Créer la fenêtre cachée (0x80000000 WS_EX_NOREDIRECTIONBITMAP ou simplement topmost)
       hWnd = INSTANCE.CreateWindowEx(
           WS_EX_TOPMOST,
           String.valueOf(windowClass),
@@ -91,7 +82,6 @@ public class HiddenSessionWindow implements WindowProc {
         running = false; return;
       }
 
-      // S'enregistrer aux notifications de sessions pour toutes les sessions
       boolean ok = Wtsapi32.INSTANCE.WTSRegisterSessionNotification(hWnd, Wtsapi32.NOTIFY_FOR_ALL_SESSIONS);
       if (!ok) {
         log.error("WTSRegisterSessionNotification failed");
@@ -99,7 +89,6 @@ public class HiddenSessionWindow implements WindowProc {
         log.info("Hidden window created and registered for session notifications.");
       }
 
-      // Boucle de messages
       MSG msg = new MSG();
       while (running && INSTANCE.GetMessage(msg, hWnd, 0, 0) != 0) {
         INSTANCE.TranslateMessage(msg);
@@ -149,7 +138,7 @@ public class HiddenSessionWindow implements WindowProc {
       }
       return new LRESULT(0);
     }
-    // Comportement par défaut
+
     return INSTANCE.DefWindowProc(hwnd, uMsg, wParam, lParam);
   }
 

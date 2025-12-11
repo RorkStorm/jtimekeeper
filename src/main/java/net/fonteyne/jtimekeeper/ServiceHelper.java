@@ -20,10 +20,10 @@ public class ServiceHelper {
     private final Map<String, TimeCounter> users = new HashMap<>();
 
     public void configureUsers() {
+
         try {
             ObjectMapper mapper = new ObjectMapper();
-            
-            // Obtenir le répertoire où se trouve le JAR
+
             String jarDir = getJarDirectory();
             Path configPath = Paths.get(jarDir, "appsettings.json");
             File configFile = configPath.toFile();
@@ -75,9 +75,6 @@ public class ServiceHelper {
         }
     }
 
-    /**
-     * Obtient le répertoire où se trouve le JAR en cours d'exécution
-     */
     public String getJarDirectory() {
         try {
             String jarPath = ServiceHelper.class.getProtectionDomain()
@@ -87,13 +84,11 @@ public class ServiceHelper {
                 .getPath();
             
             File jarFile = new File(jarPath);
-            
-            // Si c'est un JAR, retourner le répertoire parent
+
             if (jarFile.isFile()) {
                 return jarFile.getParent();
             }
-            
-            // Si on est en développement (classes dans target/classes)
+
             return jarFile.getAbsolutePath();
         } catch (Exception e) {
             logger.warn("Could not determine JAR directory, using current directory", e);
@@ -111,10 +106,8 @@ public class ServiceHelper {
         Timer timer = new Timer(true);
 
         if ((WTS_SESSION_EVENT == WTSSessionCodes.WTS_SESSION_LOGON || WTS_SESSION_EVENT == WTSSessionCodes.WTS_SESSION_UNLOCK) && getUsers().containsKey(currentUser)) {
-            // A new session has started
             logger.info("A new session has started.");
 
-            //If the session starts another day than the Svc startup date, we reset the time counter
             if (!Objects.equals(getUsers().get(currentUser).getDay(), LocalDate.now())) {
                 logger.info("The service started {} but we are now {} ->reset", getUsers().get(currentUser).getDay(), LocalDate.now());
                 getUsers().get(currentUser).setDay(LocalDate.now());
@@ -127,7 +120,6 @@ public class ServiceHelper {
 
                 logger.info("Loading User : {} with Values : {}",currentUser, getUsers().get(currentUser));
 
-                 // daemon timer
                 TimeCounter tc = users.get(currentUser);
                 long delayMs = tc.getMinutes() * 60L * 1000L;
                 timer.schedule(new TimerTask() {
@@ -170,15 +162,12 @@ public class ServiceHelper {
 
     public static int calculateRemainingMinutes(TimeCounter timeCounter) {
 
-        // Date/heure d'expiration = dernière connexion + durée en minutes
         LocalDateTime expiry = timeCounter.getLastLogOn().plusMinutes(timeCounter.getMinutes());
 
-        // Durée entre maintenant et l'expiration (peut être négative)
         long remainingMinutes = Duration.between(LocalDateTime.now(), expiry).toMinutes();
 
         logger.info("Expiry {} - Remaining minutes {}", expiry, remainingMinutes);
 
-        // Retourne 0 si négatif, sinon la valeur en minutes
         return (int) Math.max(0, remainingMinutes);
     }
 }
