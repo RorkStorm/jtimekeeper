@@ -1,5 +1,13 @@
 package net.fonteyne.jtimekeeper;
 
+/**
+ * Contains constants for Windows Terminal Services (WTS) session change notifications.
+ * <p>
+ * This class defines the message code and event types used to monitor and respond to
+ * Windows session state changes, such as user logon/logoff, lock/unlock, and console
+ * or remote desktop connections/disconnections.
+ * </p>
+ */
 public class WTSSessionCodes {
 
     // This is a constant representing the session change message code in Windows Terminal Services (WTS)

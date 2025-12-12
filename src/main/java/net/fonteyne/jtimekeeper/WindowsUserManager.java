@@ -1,3 +1,4 @@
+
 package net.fonteyne.jtimekeeper;
 
 import com.sun.jna.Pointer;
@@ -9,18 +10,23 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 
+
+/**
+ * Manages Windows user session operations including retrieving user information and locking sessions.
+ * This class provides utility methods for interacting with Windows Terminal Services API (WTS)
+ * and User32 API through JNA.
+ */
 public class WindowsUserManager {
     private static final Logger logger = LoggerFactory.getLogger(WindowsUserManager.class);
 
     /**
-     * Récupère le nom d'utilisateur associé à une session Windows
+     * Retrieves the username associated with a Windows session
      *
-     * @param sessionId ID de la session Windows
-     * @param prependDomain Si true, préfixe le nom avec le domaine (DOMAIN\\username)
-     * @return Le nom d'utilisateur ou "SYSTEM" si non trouvé
+     * @param sessionId ID of the Windows session
+     * @param prependDomain If true, prefixes the name with the domain (DOMAIN\\username)
+     * @return The username or "SYSTEM" if not found
      */
     public static String getUsernameBySessionId(int sessionId, boolean prependDomain) {
         PointerByReference bufferRef = new PointerByReference();
@@ -39,7 +45,7 @@ public class WindowsUserManager {
 
             p = bufferRef.getValue();
             if (success && p != null && bytesReturned.getValue() > 0) {
-                // WTS renvoie des wchar_t*, lire en Unicode
+                // WTS returns wchar_t*, read as Unicode
                 String user = p.getWideString(0);
                 if (user != null && !user.isEmpty()) {
                     username = user;
@@ -48,7 +54,7 @@ public class WindowsUserManager {
         } catch (Exception ex) {
             logger.error("Error getting username for session {}: {}", sessionId, ex.getMessage(), ex);
         } finally {
-            // Toujours libérer si on a reçu un pointeur non nul
+            // Always free if we received a non-null pointer
             try {
                 Pointer got = bufferRef.getValue();
                 if (got != null) {
@@ -60,7 +66,7 @@ public class WindowsUserManager {
         }
 
         if (prependDomain) {
-            // récupérer le domaine et préfixer si possible
+            // Retrieve the domain and prefix if possible
             PointerByReference domainRef = new PointerByReference();
             IntByReference domainBytes = new IntByReference();
             Pointer pd = null;
@@ -97,10 +103,13 @@ public class WindowsUserManager {
     }
 
     /**
-     * Force le verrouillage de la session
+     * Forces a Windows session to lock by executing a batch script.
+     * In debug mode, this method only logs the action without performing the actual lock.
+     * When not in debug mode, it attempts to execute a Lock.bat file located in the JAR directory.
      *
-     * @param sessionId ID de la session à verrouiller
-     * @return true si le verrouillage a réussi, false sinon
+     * @param sessionId The ID of the Windows session to lock
+     * @param debug If true, only logs the lock action without executing it; if false, performs the actual lock
+     * @return true if the lock operation was successful (or simulated successfully in debug mode), false otherwise
      */
     public static boolean forceLogout(int sessionId, boolean debug) {
 
@@ -115,7 +124,7 @@ public class WindowsUserManager {
                 ServiceHelper helper = new ServiceHelper();
                 String jarPath = helper.getJarDirectory();
 
-                // Option 1: Exécuter Lock.bat
+                // Option 1: Execute Lock.bat
                 ProcessBuilder processBuilder = new ProcessBuilder("cmd.exe", "/c", "Lock.bat");
                 processBuilder.directory(new File(jarPath));
                 Process process = processBuilder.start();
@@ -123,7 +132,7 @@ public class WindowsUserManager {
                 int exitCode = process.waitFor();
                 return exitCode == 0;
 
-                // Option 2 (commentée): Utiliser rundll32 pour verrouiller
+                // Option 2 (commented): Use rundll32 to lock
                 // ProcessBuilder processBuilder = new ProcessBuilder(
                 //     "rundll32.exe",
                 //     "user32.dll,LockWorkStation"
@@ -146,10 +155,10 @@ public class WindowsUserManager {
     }
 
     /**
-     * Verrouille directement la station de travail en utilisant l'API Windows
-     * (Alternative plus directe à forceLogout)
+     * Locks the workstation directly using the Windows API
+     * (More direct alternative to forceLogout)
      *
-     * @return true si le verrouillage a réussi
+     * @return true if the lock was successful
      */
     public static boolean lockWorkstation() {
         try {
