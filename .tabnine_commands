@@ -1,0 +1,35 @@
+{
+  "version": "v1",
+  "commands": [
+    {
+      "id": "cd740823-0b4c-4fbd-a13e-873c1094e1ac",
+      "type": "shared",
+      "version": "v1",
+      "name": "clean-code",
+      "description": "Check the code against the recomandations from Uncle Bob",
+      "updatedAt": "1765549869439",
+      "promptTemplate": [
+        {
+          "type": "text",
+          "text": " Optimize the code from $Open file based on recommendations from the book \"Clean Code\" from Robert C. \"Uncle Bob\" Martin"
+        }
+      ],
+      "promptTemplateText": " Optimize the code from $Open file based on recommendations from the book \"Clean Code\" from Robert C. \"Uncle Bob\" Martin"
+    },
+    {
+      "id": "d8628f00-ece9-479e-8265-6db674393350",
+      "type": "shared",
+      "version": "v1",
+      "name": "check-vulnerabilities",
+      "description": "Scan for Vulnerabilities",
+      "updatedAt": "1765549900749",
+      "promptTemplate": [
+        {
+          "type": "text",
+          "text": "Optimize the code from $Open file to avoid vulnerabilities from the OWASP Top 10."
+        }
+      ],
+      "promptTemplateText": "Optimize the code from $Open file to avoid vulnerabilities from the OWASP Top 10."
+    }
+  ]
+}
