@@ -15,6 +15,9 @@ import com.sun.jna.platform.win32.Wtsapi32;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
+
 import static com.sun.jna.platform.win32.User32.*;
 
 /**
@@ -29,6 +32,14 @@ import static com.sun.jna.platform.win32.User32.*;
  * WTSRegisterSessionNotification
  * </a>
  * </p>
+ * 
+ * <p><b>Security Considerations:</b></p>
+ * <ul>
+ *   <li>Thread-safe using AtomicBoolean for state management</li>
+ *   <li>Input validation on session IDs and event codes</li>
+ *   <li>Proper resource cleanup to prevent memory leaks</li>
+ *   <li>Username sanitization to prevent injection attacks</li>
+ * </ul>
  */
 public class HiddenSessionWindow implements WindowProc {
     private static final Logger logger = LoggerFactory.getLogger(HiddenSessionWindow.class);
@@ -38,9 +49,20 @@ public class HiddenSessionWindow implements WindowProc {
     private static final String MESSAGE_LOOP_THREAD_NAME = "win32-msg-loop";
     private static final int SUCCESS_RESULT = 0;
     
-    private volatile boolean running = false;
-    private Thread messageLoopThread;
-    private HWND windowHandle;
+    // Security: Maximum allowed session ID to prevent integer overflow attacks
+    private static final int MAX_SESSION_ID = 65535;
+    
+    // Security: Maximum username length to prevent buffer overflow
+    private static final int MAX_USERNAME_LENGTH = 256;
+    
+    // Security: Pattern to validate usernames (alphanumeric, underscore, hyphen, backslash for domain)
+    private static final Pattern USERNAME_PATTERN = Pattern.compile("^[a-zA-Z0-9_\\-\\\\]{1," + MAX_USERNAME_LENGTH + "}$");
+    
+    // Security: Use AtomicBoolean for thread-safe state management
+    private final AtomicBoolean running = new AtomicBoolean(false);
+    
+    private volatile Thread messageLoopThread;
+    private volatile HWND windowHandle;
     private final WString windowClassName = new WString(WINDOW_CLASS_NAME);
     private final ServiceHelper serviceHelper = new ServiceHelper();
 
@@ -50,7 +72,7 @@ public class HiddenSessionWindow implements WindowProc {
      * @return true if the window is running, false otherwise
      */
     public boolean isRunning() {
-        return running;
+        return running.get();
     }
 
     /**
@@ -63,29 +85,43 @@ public class HiddenSessionWindow implements WindowProc {
      * <p>
      * If the window is already running, this method returns immediately without taking any action.
      * </p>
+     * 
+     * <p><b>Security:</b> Uses atomic compare-and-set to prevent race conditions.</p>
      */
     public void start() {
-        if (running) {
+        // Security: Atomic check-and-set to prevent race conditions
+        if (!running.compareAndSet(false, true)) {
             logger.warn("Hidden window is already running");
             return;
         }
         
-        running = true;
-        serviceHelper.configureUsers();
-        startMessageLoopThread();
-        
-        logger.info("Hidden session window started successfully");
-
-        //To simulate the first LOGON -> to convert into an Integration Test
-        serviceHelper.handleSessionChange("efn", WTSSessionCodes.WTS_SESSION_LOGON, 0);
+        try {
+            serviceHelper.configureUsers();
+            startMessageLoopThread();
+            
+            logger.info("Hidden session window started successfully");
+        } catch (Exception ex) {
+            logger.error("Failed to start hidden session window", ex);
+            running.set(false);
+            throw new IllegalStateException("Failed to start session window", ex);
+        }
     }
 
     /**
      * Creates and starts the message loop thread.
+     * 
+     * <p><b>Security:</b> Thread is created with controlled name and daemon status.</p>
      */
     private void startMessageLoopThread() {
         messageLoopThread = new Thread(this::runMessageLoop, MESSAGE_LOOP_THREAD_NAME);
         messageLoopThread.setDaemon(false);
+        
+        // Security: Set uncaught exception handler
+        messageLoopThread.setUncaughtExceptionHandler((thread, throwable) -> {
+            logger.error("Uncaught exception in message loop thread", throwable);
+            running.set(false);
+        });
+        
         messageLoopThread.start();
     }
 
@@ -103,24 +139,50 @@ public class HiddenSessionWindow implements WindowProc {
      * <p>
      * This method is safe to call multiple times or when the window is not running.
      * </p>
+     * 
+     * <p><b>Security:</b> Ensures proper cleanup even in case of exceptions.</p>
      */
     public void stop() {
+        if (!running.compareAndSet(true, false)) {
+            logger.debug("Hidden window is not running, nothing to stop");
+            return;
+        }
+        
         try {
             if (windowHandle != null) {
                 unregisterSessionNotifications();
                 destroyWindow();
                 postQuitMessage();
             }
+            
+            // Security: Wait for thread to terminate with timeout
+            if (messageLoopThread != null && messageLoopThread.isAlive()) {
+                try {
+                    messageLoopThread.join(5000); // 5 second timeout
+                    if (messageLoopThread.isAlive()) {
+                        logger.warn("Message loop thread did not terminate within timeout");
+                    }
+                } catch (InterruptedException ex) {
+                    logger.warn("Interrupted while waiting for message loop thread to terminate");
+                    Thread.currentThread().interrupt();
+                }
+            }
+            
             logger.info("Hidden session window stopped successfully");
         } catch (Throwable t) {
-            logger.warn("Error while stopping hidden window: {}", t.getMessage(), t);
+            logger.error("Error while stopping hidden window", t);
         } finally {
-            running = false;
+            // Security: Ensure running flag is always set to false
+            running.set(false);
+            windowHandle = null;
+            messageLoopThread = null;
         }
     }
 
     /**
      * Unregisters WTS session change notifications.
+     * 
+     * <p><b>Security:</b> Handles exceptions to prevent resource leaks.</p>
      */
     private void unregisterSessionNotifications() {
         try {
@@ -133,6 +195,8 @@ public class HiddenSessionWindow implements WindowProc {
 
     /**
      * Destroys the hidden window.
+     * 
+     * <p><b>Security:</b> Handles exceptions to prevent resource leaks.</p>
      */
     private void destroyWindow() {
         try {
@@ -145,6 +209,8 @@ public class HiddenSessionWindow implements WindowProc {
 
     /**
      * Posts a WM_QUIT message to exit the message loop.
+     * 
+     * <p><b>Security:</b> Handles exceptions gracefully.</p>
      */
     private void postQuitMessage() {
         try {
@@ -166,6 +232,8 @@ public class HiddenSessionWindow implements WindowProc {
      *   <li>Enters a message loop to process Windows messages until the window is stopped</li>
      * </ul>
      * </p>
+     * 
+     * <p><b>Security:</b> Comprehensive error handling and resource cleanup.</p>
      */
     private void runMessageLoop() {
         try {
@@ -186,7 +254,7 @@ public class HiddenSessionWindow implements WindowProc {
         } catch (Throwable t) {
             logger.error("Message loop error", t);
         } finally {
-            running = false;
+            running.set(false);
             logger.info("Message loop terminated");
         }
     }
@@ -195,23 +263,33 @@ public class HiddenSessionWindow implements WindowProc {
      * Registers the window class with Windows.
      *
      * @return true if registration succeeded, false otherwise
+     * 
+     * <p><b>Security:</b> Validates module handle before use.</p>
      */
     private boolean registerWindowClass() {
         try {
             HMODULE moduleHandle = Kernel32.INSTANCE.GetModuleHandle("");
+            
+            // Security: Validate module handle
+            if (moduleHandle == null) {
+                logger.error("Failed to get module handle");
+                running.set(false);
+                return false;
+            }
+            
             WNDCLASSEX windowClass = createWindowClass(moduleHandle);
             
             if (INSTANCE.RegisterClassEx(windowClass).intValue() == 0) {
                 logger.error("Failed to register window class");
-                running = false;
+                running.set(false);
                 return false;
             }
             
             logger.debug("Window class registered successfully");
             return true;
         } catch (Exception ex) {
-            logger.error("Error registering window class: {}", ex.getMessage(), ex);
-            running = false;
+            logger.error("Error registering window class", ex);
+            running.set(false);
             return false;
         }
     }
@@ -234,10 +312,19 @@ public class HiddenSessionWindow implements WindowProc {
      * Creates the hidden window.
      *
      * @return true if creation succeeded, false otherwise
+     * 
+     * <p><b>Security:</b> Validates module handle and window handle.</p>
      */
     private boolean createHiddenWindow() {
         try {
             HMODULE moduleHandle = Kernel32.INSTANCE.GetModuleHandle("");
+            
+            // Security: Validate module handle
+            if (moduleHandle == null) {
+                logger.error("Failed to get module handle for window creation");
+                running.set(false);
+                return false;
+            }
             
             windowHandle = INSTANCE.CreateWindowEx(
                 WS_EX_TOPMOST,
@@ -248,17 +335,18 @@ public class HiddenSessionWindow implements WindowProc {
                 null, null, moduleHandle, null
             );
             
+            // Security: Validate window handle
             if (windowHandle == null) {
                 logger.error("Failed to create hidden window");
-                running = false;
+                running.set(false);
                 return false;
             }
             
             logger.debug("Hidden window created successfully");
             return true;
         } catch (Exception ex) {
-            logger.error("Error creating hidden window: {}", ex.getMessage(), ex);
-            running = false;
+            logger.error("Error creating hidden window", ex);
+            running.set(false);
             return false;
         }
     }
@@ -283,17 +371,19 @@ public class HiddenSessionWindow implements WindowProc {
             logger.info("Registered for WTS session notifications (all sessions)");
             return true;
         } catch (Exception ex) {
-            logger.error("Error registering for session notifications: {}", ex.getMessage(), ex);
+            logger.error("Error registering for session notifications", ex);
             return false;
         }
     }
 
     /**
      * Processes Windows messages in a loop until the window is stopped.
+     * 
+     * <p><b>Security:</b> Checks running state to prevent infinite loops.</p>
      */
     private void processMessages() {
         MSG message = new MSG();
-        while (running && INSTANCE.GetMessage(message, windowHandle, 0, 0) != 0) {
+        while (running.get() && INSTANCE.GetMessage(message, windowHandle, 0, 0) != 0) {
             INSTANCE.TranslateMessage(message);
             INSTANCE.DispatchMessage(message);
         }
@@ -312,14 +402,21 @@ public class HiddenSessionWindow implements WindowProc {
      * @param wParam additional message-specific information (session change code for WM_WTSSESSION_CHANGE)
      * @param lParam additional message-specific information (session ID for WM_WTSSESSION_CHANGE)
      * @return an LRESULT containing 0 for WM_WTSSESSION_CHANGE, or DefWindowProc result for other messages
+     * 
+     * <p><b>Security:</b> Validates input parameters and handles exceptions.</p>
      */
     @Override
     public LRESULT callback(HWND hwnd, int uMsg, WPARAM wParam, LPARAM lParam) {
-        if (uMsg == WTSSessionCodes.WM_WTSSESSION_CHANGE) {
-            return handleSessionChangeMessage(wParam, lParam);
+        try {
+            if (uMsg == WTSSessionCodes.WM_WTSSESSION_CHANGE) {
+                return handleSessionChangeMessage(wParam, lParam);
+            }
+            
+            return INSTANCE.DefWindowProc(hwnd, uMsg, wParam, lParam);
+        } catch (Exception ex) {
+            logger.error("Error in window callback", ex);
+            return new LRESULT(SUCCESS_RESULT);
         }
-        
-        return INSTANCE.DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
 
     /**
@@ -328,18 +425,90 @@ public class HiddenSessionWindow implements WindowProc {
      * @param wParam contains the session change code
      * @param lParam contains the session ID
      * @return an LRESULT with value 0
+     * 
+     * <p><b>Security:</b> Validates session ID and sanitizes username.</p>
      */
     private LRESULT handleSessionChangeMessage(WPARAM wParam, LPARAM lParam) {
         int eventCode = wParam.intValue();
         int sessionId = lParam.intValue();
         
-        String username = WindowsUserManager.getUsernameBySessionId(sessionId, false);
-        logger.info("Session change detected - User: '{}', Session ID: {}, Event: {}", 
-                   username, sessionId, getEventName(eventCode));
+        // Security: Validate session ID to prevent integer overflow
+        if (!isValidSessionId(sessionId)) {
+            logger.warn("Invalid session ID received: {}", sessionId);
+            return new LRESULT(SUCCESS_RESULT);
+        }
         
-        processSessionEvent(username, eventCode, sessionId);
+        // Security: Validate event code
+        if (!isValidEventCode(eventCode)) {
+            logger.warn("Invalid event code received: {}", eventCode);
+            return new LRESULT(SUCCESS_RESULT);
+        }
+        
+        String username = WindowsUserManager.getUsernameBySessionId(sessionId, false);
+        
+        // Security: Sanitize username to prevent injection attacks
+        String sanitizedUsername = sanitizeUsername(username);
+        
+        // Security: Use parameterized logging to prevent log injection
+        logger.info("Session change detected - User: '{}', Session ID: {}, Event: {}", 
+                   sanitizedUsername, sessionId, getEventName(eventCode));
+        
+        processSessionEvent(sanitizedUsername, eventCode, sessionId);
         
         return new LRESULT(SUCCESS_RESULT);
+    }
+
+    /**
+     * Validates a session ID.
+     * 
+     * @param sessionId the session ID to validate
+     * @return true if valid, false otherwise
+     * 
+     * <p><b>Security:</b> Prevents integer overflow and negative values.</p>
+     */
+    private boolean isValidSessionId(int sessionId) {
+        return sessionId >= 0 && sessionId <= MAX_SESSION_ID;
+    }
+
+    /**
+     * Validates an event code.
+     * 
+     * @param eventCode the event code to validate
+     * @return true if valid, false otherwise
+     * 
+     * <p><b>Security:</b> Ensures event code is within expected range.</p>
+     */
+    private boolean isValidEventCode(int eventCode) {
+        return eventCode >= WTSSessionCodes.WTS_CONSOLE_CONNECT && 
+               eventCode <= WTSSessionCodes.WTS_SESSION_REMOTE_CONTROL;
+    }
+
+    /**
+     * Sanitizes a username to prevent injection attacks.
+     * 
+     * @param username the username to sanitize
+     * @return the sanitized username, or "INVALID" if validation fails
+     * 
+     * <p><b>Security:</b> Validates against whitelist pattern and length limits.</p>
+     */
+    private String sanitizeUsername(String username) {
+        if (username == null || username.isEmpty()) {
+            return "UNKNOWN";
+        }
+        
+        // Security: Enforce maximum length
+        if (username.length() > MAX_USERNAME_LENGTH) {
+            logger.warn("Username exceeds maximum length: {}", username.length());
+            return "INVALID_LENGTH";
+        }
+        
+        // Security: Validate against whitelist pattern
+        if (!USERNAME_PATTERN.matcher(username).matches()) {
+            logger.warn("Username contains invalid characters");
+            return "INVALID_CHARS";
+        }
+        
+        return username;
     }
 
     /**
@@ -348,26 +517,33 @@ public class HiddenSessionWindow implements WindowProc {
      * @param username  the username associated with the session
      * @param eventCode the WTS session event code
      * @param sessionId the Windows session ID
+     * 
+     * <p><b>Security:</b> Handles exceptions to prevent service disruption.</p>
      */
     private void processSessionEvent(String username, int eventCode, int sessionId) {
-        switch (eventCode) {
-            case WTSSessionCodes.WTS_SESSION_LOGON:
-            case WTSSessionCodes.WTS_SESSION_LOGOFF:
-            case WTSSessionCodes.WTS_SESSION_LOCK:
-            case WTSSessionCodes.WTS_SESSION_UNLOCK:
-                serviceHelper.handleSessionChange(username, eventCode, sessionId);
-                break;
-                
-            case WTSSessionCodes.WTS_CONSOLE_CONNECT:
-            case WTSSessionCodes.WTS_CONSOLE_DISCONNECT:
-            case WTSSessionCodes.WTS_REMOTE_CONNECT:
-            case WTSSessionCodes.WTS_REMOTE_DISCONNECT:
-            case WTSSessionCodes.WTS_SESSION_REMOTE_CONTROL:
-                logger.debug("Informational event: {}", getEventName(eventCode));
-                break;
-                
-            default:
-                logger.debug("Unknown WM_WTSSESSION_CHANGE event code: {}", eventCode);
+        try {
+            switch (eventCode) {
+                case WTSSessionCodes.WTS_SESSION_LOGON:
+                case WTSSessionCodes.WTS_SESSION_LOGOFF:
+                case WTSSessionCodes.WTS_SESSION_LOCK:
+                case WTSSessionCodes.WTS_SESSION_UNLOCK:
+                    serviceHelper.handleSessionChange(username, eventCode, sessionId);
+                    break;
+                    
+                case WTSSessionCodes.WTS_CONSOLE_CONNECT:
+                case WTSSessionCodes.WTS_CONSOLE_DISCONNECT:
+                case WTSSessionCodes.WTS_REMOTE_CONNECT:
+                case WTSSessionCodes.WTS_REMOTE_DISCONNECT:
+                case WTSSessionCodes.WTS_SESSION_REMOTE_CONTROL:
+                    logger.debug("Informational event: {}", getEventName(eventCode));
+                    break;
+                    
+                default:
+                    logger.debug("Unknown WM_WTSSESSION_CHANGE event code: {}", eventCode);
+            }
+        } catch (Exception ex) {
+            logger.error("Error processing session event for user '{}', event: {}", 
+                        username, getEventName(eventCode), ex);
         }
     }
 
@@ -378,27 +554,17 @@ public class HiddenSessionWindow implements WindowProc {
      * @return the event name
      */
     private String getEventName(int eventCode) {
-        switch (eventCode) {
-            case WTSSessionCodes.WTS_SESSION_LOGON:
-                return "WTS_SESSION_LOGON";
-            case WTSSessionCodes.WTS_SESSION_LOGOFF:
-                return "WTS_SESSION_LOGOFF";
-            case WTSSessionCodes.WTS_SESSION_LOCK:
-                return "WTS_SESSION_LOCK";
-            case WTSSessionCodes.WTS_SESSION_UNLOCK:
-                return "WTS_SESSION_UNLOCK";
-            case WTSSessionCodes.WTS_CONSOLE_CONNECT:
-                return "WTS_CONSOLE_CONNECT";
-            case WTSSessionCodes.WTS_CONSOLE_DISCONNECT:
-                return "WTS_CONSOLE_DISCONNECT";
-            case WTSSessionCodes.WTS_REMOTE_CONNECT:
-                return "WTS_REMOTE_CONNECT";
-            case WTSSessionCodes.WTS_REMOTE_DISCONNECT:
-                return "WTS_REMOTE_DISCONNECT";
-            case WTSSessionCodes.WTS_SESSION_REMOTE_CONTROL:
-                return "WTS_SESSION_REMOTE_CONTROL";
-            default:
-                return "UNKNOWN_EVENT_" + eventCode;
-        }
+        return switch (eventCode) {
+            case WTSSessionCodes.WTS_SESSION_LOGON -> "WTS_SESSION_LOGON";
+            case WTSSessionCodes.WTS_SESSION_LOGOFF -> "WTS_SESSION_LOGOFF";
+            case WTSSessionCodes.WTS_SESSION_LOCK -> "WTS_SESSION_LOCK";
+            case WTSSessionCodes.WTS_SESSION_UNLOCK -> "WTS_SESSION_UNLOCK";
+            case WTSSessionCodes.WTS_CONSOLE_CONNECT -> "WTS_CONSOLE_CONNECT";
+            case WTSSessionCodes.WTS_CONSOLE_DISCONNECT -> "WTS_CONSOLE_DISCONNECT";
+            case WTSSessionCodes.WTS_REMOTE_CONNECT -> "WTS_REMOTE_CONNECT";
+            case WTSSessionCodes.WTS_REMOTE_DISCONNECT -> "WTS_REMOTE_DISCONNECT";
+            case WTSSessionCodes.WTS_SESSION_REMOTE_CONTROL -> "WTS_SESSION_REMOTE_CONTROL";
+            default -> "UNKNOWN_EVENT_" + eventCode;
+        };
     }
 }

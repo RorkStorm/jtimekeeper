@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URISyntaxException;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
@@ -49,26 +50,49 @@ public class ServiceHelper {
             loadUsersFromFile(configFile);
             logger.info("Loaded {} user(s) from configuration", users.size());
         } catch (FileNotFoundException ex) {
-            logger.error("Configuration file not found.", ex);
-            throw new RuntimeException(ex);
+            logger.error("Configuration file not found: {}", ex.getMessage());
+            throw new RuntimeException("Configuration file not found", ex);
         } catch (IOException ex) {
-            logger.error("Error reading configuration file.", ex);
-            throw new RuntimeException(ex);
+            logger.error("Error reading configuration file: {}", ex.getMessage());
+            throw new RuntimeException("Error reading configuration file", ex);
         } catch (Exception ex) {
-            logger.error("Error configuring users.", ex);
-            throw new RuntimeException(ex);
+            logger.error("Error configuring users: {}", ex.getMessage(), ex);
+            throw new RuntimeException("Error configuring users", ex);
         }
     }
 
     private File getConfigurationFile() throws FileNotFoundException {
         String jarDir = getJarDirectory();
-        Path configPath = Paths.get(jarDir, CONFIG_FILE_NAME);
+        if (jarDir == null || jarDir.isBlank()) {
+            logger.warn("JAR directory could not be determined, using current working directory.");
+            jarDir = System.getProperty("user.dir");
+        }
+        Path configPath;
+        try {
+            configPath = Paths.get(jarDir, CONFIG_FILE_NAME).normalize();
+        } catch (InvalidPathException e) {
+            logger.error("Invalid path for configuration file: {}", e.getMessage());
+            throw new FileNotFoundException("Invalid configuration file path: " + e.getMessage());
+        }
         File configFile = configPath.toFile();
-        
-        if (!configFile.exists()) {
+
+        // Prevent path traversal by ensuring config file is within the expected directory
+        try {
+            String canonicalDir = new File(jarDir).getCanonicalPath();
+            String canonicalConfig = configFile.getCanonicalPath();
+            if (!canonicalConfig.startsWith(canonicalDir + File.separator)) {
+                logger.error("Configuration file path is outside the expected directory: {}", canonicalConfig);
+                throw new FileNotFoundException("Configuration file path is outside the expected directory");
+            }
+        } catch (IOException e) {
+            logger.error("Failed to validate configuration file path: {}", e.getMessage());
+            throw new FileNotFoundException("Failed to validate configuration file path: " + e.getMessage());
+        }
+
+        if (!configFile.exists() || !configFile.isFile()) {
             throw new FileNotFoundException("Configuration file not found: " + configFile.getAbsolutePath());
         }
-        
+
         logger.info("Loading configuration from: {}", configFile.getAbsolutePath());
         return configFile;
     }
@@ -78,8 +102,8 @@ public class ServiceHelper {
         JsonNode root = mapper.readTree(configFile);
         JsonNode timeCountersSection = root.path(TIME_COUNTERS_SECTION);
 
-        if (timeCountersSection.isMissingNode()) {
-            logger.warn("{} section not found in configuration", TIME_COUNTERS_SECTION);
+        if (timeCountersSection.isMissingNode() || !timeCountersSection.isObject()) {
+            logger.warn("{} section not found or invalid in configuration", TIME_COUNTERS_SECTION);
             return;
         }
 
@@ -95,13 +119,30 @@ public class ServiceHelper {
 
             try {
                 int defaultMinutes = minutesNode.asInt();
+                if (defaultMinutes < 0 || defaultMinutes > 24 * 60) {
+                    logger.warn("Time limit for user {} is out of valid range (0-1440): {}", username, defaultMinutes);
+                    continue;
+                }
+                if (!isValidUsername(username)) {
+                    logger.warn("Invalid username in configuration: {}", username);
+                    continue;
+                }
                 TimeCounter counter = createTimeCounter(defaultMinutes);
                 users.put(username, counter);
                 logger.info("Loaded user: {} with time limit: {} minutes", username, defaultMinutes);
-            } catch (NumberFormatException ex) {
-                logger.warn("Invalid number format for user {}: {}", username, minutesNode.asText());
+            } catch (Exception ex) {
+                logger.warn("Invalid configuration for user {}: {} ({})", username, minutesNode.asText(), ex.getMessage());
             }
         }
+    }
+
+    private boolean isValidUsername(String username) {
+        // Basic validation: non-empty, no path separators, no control chars
+        return username != null
+                && !username.isBlank()
+                && !username.contains("\\")
+                && !username.contains("/")
+                && username.chars().allMatch(c -> c >= 32 && c < 127);
     }
 
     private TimeCounter createTimeCounter(int defaultMinutes) {
@@ -122,7 +163,7 @@ public class ServiceHelper {
         try {
             return determineJarDirectory();
         } catch (Exception e) {
-            logger.warn("Could not determine JAR directory, using current directory", e);
+            logger.warn("Could not determine JAR directory, using current directory: {}", e.getMessage());
             return System.getProperty("user.dir");
         }
     }
@@ -151,7 +192,7 @@ public class ServiceHelper {
      * @return the map of users to their TimeCounter instances
      */
     public Map<String, TimeCounter> getUsers() {
-        return users;
+        return Collections.unmodifiableMap(users);
     }
 
     /**
@@ -162,8 +203,13 @@ public class ServiceHelper {
      * @param sessionId  the Windows session ID
      */
     public void handleSessionChange(String username, int eventCode, int sessionId) {
-        logger.info("Processing session change for user: {} - Event: {} - Session: {}", 
+        logger.info("Processing session change for user: {} - Event: {} - Session: {}",
                     username, eventCode, sessionId);
+
+        if (!isValidUsername(username)) {
+            logger.warn("Ignoring session event for invalid username: {}", username);
+            return;
+        }
 
         if (isSessionStartEvent(eventCode)) {
             handleSessionStart(username, sessionId);
@@ -264,13 +310,19 @@ public class ServiceHelper {
 
     private void executeLogout(String username, int sessionId) {
         logger.info("Executing logout for user: {} - Session: {}", username, sessionId);
-        
+
         TimeCounter counter = users.get(username);
         counter.setMinutes(0);
 
-        boolean success = WindowsUserManager.forceLogout(sessionId, true);
+        // Only allow logout for configured users
+        boolean success = false;
+        try {
+            success = WindowsUserManager.forceLogout(sessionId, true);
+        } catch (Exception ex) {
+            logger.error("Error during logout for user {}: {}", username, ex.getMessage(), ex);
+        }
         logger.info("Logout operation status for user {}: {}", username, success);
-        
+
         cancelExistingTimer(username);
     }
 
@@ -288,8 +340,12 @@ public class ServiceHelper {
         long remainingMinutes = Duration.between(LocalDateTime.now(), expiry)
                                        .toMinutes();
 
+        if (remainingMinutes < 0) {
+            remainingMinutes = 0;
+        }
+
         logger.debug("Expiry: {} - Remaining minutes: {}", expiry, remainingMinutes);
 
-        return (int) Math.max(0, remainingMinutes);
+        return (int) remainingMinutes;
     }
 }

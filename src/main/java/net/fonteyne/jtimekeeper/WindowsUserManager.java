@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.InvalidPathException;
 
 /**
  * Manages Windows user session operations including retrieving user information and locking sessions.
@@ -213,21 +214,51 @@ public class WindowsUserManager {
     private static boolean executeLockScript() {
         try {
             File scriptDirectory = getScriptDirectory();
+            File lockScript = new File(scriptDirectory, LOCK_SCRIPT_NAME);
+
+            // Validate script path to prevent path traversal and ensure script exists
+            if (!lockScript.getCanonicalPath().startsWith(scriptDirectory.getCanonicalPath() + File.separator)) {
+                logger.error("Lock script path is outside the expected directory: {}", lockScript.getAbsolutePath());
+                return false;
+            }
+            if (!lockScript.exists() || !lockScript.isFile()) {
+                logger.error("Lock script not found: {}", lockScript.getAbsolutePath());
+                return false;
+            }
+            if (!lockScript.canExecute()) {
+                logger.error("Lock script is not executable: {}", lockScript.getAbsolutePath());
+                return false;
+            }
+
             ProcessBuilder processBuilder = createLockProcessBuilder(scriptDirectory);
-            
+
+            // Set a minimal environment for the process
+            processBuilder.environment().clear();
+            processBuilder.environment().put("PATH", System.getenv("PATH"));
+
             Process process = processBuilder.start();
-            int exitCode = process.waitFor();
-            
+
+            // Wait for process to finish with a timeout to avoid hanging
+            final int timeoutSeconds = 10;
+            boolean finished = process.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                logger.error("Lock script timed out after {} seconds", timeoutSeconds);
+                return false;
+            }
+
+            int exitCode = process.exitValue();
+
             boolean success = exitCode == 0;
             if (success) {
                 logger.info("Lock script executed successfully");
             } else {
                 logger.warn("Lock script exited with code: {}", exitCode);
             }
-            
+
             return success;
-            
-        } catch (IOException ex) {
+
+        } catch (InvalidPathException | IOException ex) {
             logger.error("Failed to execute lock script: {}", ex.getMessage(), ex);
             return false;
         } catch (InterruptedException ex) {
@@ -248,6 +279,10 @@ public class WindowsUserManager {
     private static File getScriptDirectory() {
         ServiceHelper helper = new ServiceHelper();
         String jarPath = helper.getJarDirectory();
+        if (jarPath == null || jarPath.isBlank()) {
+            logger.warn("JAR directory could not be determined, using current working directory.");
+            jarPath = System.getProperty("user.dir");
+        }
         return new File(jarPath);
     }
 
@@ -258,9 +293,10 @@ public class WindowsUserManager {
      * @return a configured ProcessBuilder
      */
     private static ProcessBuilder createLockProcessBuilder(File directory) {
-        ProcessBuilder processBuilder = new ProcessBuilder("cmd.exe", "/c", LOCK_SCRIPT_NAME);
-        processBuilder.directory(directory);
-        return processBuilder;
+        // Defensive: Use absolute path to avoid ambiguity
+        File lockScript = new File(directory, LOCK_SCRIPT_NAME);
+        return new ProcessBuilder("cmd.exe", "/c", lockScript.getAbsolutePath())
+                .directory(directory);
     }
 
     /**
