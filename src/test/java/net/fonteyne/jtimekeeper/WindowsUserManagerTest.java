@@ -28,40 +28,8 @@ public class WindowsUserManagerTest {
     }
 
     @Test
-    public void shouldReturnResultOfSimulateLogoutWhenDebugIsTrue() {
+    public void shouldCallExecuteLockScript() throws Exception {
         // Arrange
-        int sessionId = 1;
-        boolean debug = true;
-
-        // Act
-        boolean result = WindowsUserManager.forceLogout(sessionId, debug);
-
-        // Assert
-        assertTrue(result, "Should return true when debug mode is enabled");
-    }
-
-    @Test
-    public void shouldNotCallSimulateLogoutWhenDebugIsFalse() {
-        // Arrange
-        int sessionId = 1;
-        boolean debug = false;
-
-        // Act
-        boolean result = WindowsUserManager.forceLogout(sessionId, debug);
-
-        // Assert
-        // When debug is false, executeLockScript() is called instead of simulateLogout()
-        // The result depends on whether the lock script execution succeeds
-        // We can only verify that the method completes without throwing an exception
-        // and returns a boolean value
-        assertNotNull(result);
-    }
-
-    @Test
-    public void shouldCallExecuteLockScriptWhenDebugIsFalse() throws Exception {
-        // Arrange
-        int sessionId = 1;
-        boolean debug = false;
 
         // Create a test lock script that exits successfully
         createTestLockScript();
@@ -70,7 +38,7 @@ public class WindowsUserManagerTest {
         // For testing purposes, we use a simple script that exits with code 0
 
         // Act
-        boolean result = WindowsUserManager.forceLogout(sessionId, debug);
+        boolean result = WindowsUserManager.forceLogout();
 
         // Assert
         assertTrue(result, "Lock script should execute successfully");
@@ -78,9 +46,16 @@ public class WindowsUserManagerTest {
 
     @Test
     public void shouldLogInfoMessageWhenWorkstationIsLockedSuccessfully() {
+
         // Arrange
-        // Note: This test will attempt to lock the actual workstation
-        // In a real test environment, you would mock User32.INSTANCE.LockWorkStation()
+        WorkstationLocker mockLocker = new WorkstationLocker() {
+            @Override
+            public boolean lock() {
+                return true;
+            }
+        };
+
+        WindowsUserManager.setLocker(mockLocker);
 
         // Act
         boolean result = WindowsUserManager.lockWorkstation();
@@ -88,15 +63,20 @@ public class WindowsUserManagerTest {
         // Assert
         // We can only verify that the method returns a boolean value
         // The actual result depends on whether the lock operation succeeds
-        assertNotNull(result);
+        assertTrue(result);
     }
 
     @Test
     public void shouldLogWarningMessageWhenUser32APIFailsToLockWorkstation() {
         // Arrange
-        // Note: This test would ideally mock User32.INSTANCE.LockWorkStation()
-        // to return false, but since we cannot easily mock static JNA calls
-        // without modifying the production code, this test documents the expected behavior
+        WorkstationLocker mockLocker = new WorkstationLocker() {
+            @Override
+            public boolean lock() {
+                return false;
+            }
+        };
+
+        WindowsUserManager.setLocker(mockLocker);
 
         // Act
         boolean result = WindowsUserManager.lockWorkstation();
@@ -105,6 +85,6 @@ public class WindowsUserManagerTest {
         // The actual result depends on whether the lock operation succeeds
         // In case of failure, the method should return false and log a warning
         // We can only verify that the method returns a boolean value
-        assertNotNull(result);
+        assertFalse(result);
     }
 }

@@ -2,7 +2,6 @@
 package net.fonteyne.jtimekeeper;
 
 import com.sun.jna.Pointer;
-import com.sun.jna.platform.win32.User32;
 import com.sun.jna.platform.win32.Wtsapi32;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.PointerByReference;
@@ -25,7 +24,13 @@ public class WindowsUserManager {
     private static final String DEFAULT_USERNAME = "SYSTEM";
     private static final String LOCK_SCRIPT_NAME = "Lock.bat";
     private static final String DOMAIN_SEPARATOR = "\\";
+    private static WorkstationLocker locker = new User32WorkstationLocker();
 
+    // Setter pour injection de mock (tests uniquement)
+    static void setLocker(WorkstationLocker locker) {
+        WindowsUserManager.locker = locker;
+    }
+    
     /**
      * Retrieves the username associated with a Windows session.
      *
@@ -179,31 +184,13 @@ public class WindowsUserManager {
     /**
      * Forces a logout for a Windows session.
      * <p>
-     * In debug mode, this method only logs the action without performing the actual logout.
-     * In production mode, it executes a batch script to lock the workstation.
+     * Executes a batch script to lock the workstation.
      * </p>
      *
-     * @param sessionId the ID of the Windows session to logout
-     * @param debug     if true, only logs the action; if false, performs the actual logout
-     * @return true if the logout operation was successful (or simulated in debug mode), false otherwise
+     * @return true if the logout operation was successful, false otherwise
      */
-    public static boolean forceLogout(int sessionId, boolean debug) {
-        if (debug) {
-            return simulateLogout(sessionId);
-        }
-        
+    public static boolean forceLogout() {
         return executeLockScript();
-    }
-
-    /**
-     * Simulates a logout operation for debugging purposes.
-     *
-     * @param sessionId the session ID to log
-     * @return always returns true
-     */
-    private static boolean simulateLogout(int sessionId) {
-        logger.info("DEBUG MODE: Simulating logout for session {}", sessionId);
-        return true;
     }
 
     /**
@@ -302,7 +289,7 @@ public class WindowsUserManager {
     /**
      * Locks the workstation directly using the Windows User32 API.
      * <p>
-     * This is a more direct alternative to {@link #forceLogout(int, boolean)}
+     * This is a more direct alternative to {@link #forceLogout()}
      * that doesn't require a batch script.
      * </p>
      *
@@ -310,7 +297,7 @@ public class WindowsUserManager {
      */
     public static boolean lockWorkstation() {
         try {
-            boolean success = User32.INSTANCE.LockWorkStation().booleanValue();
+            boolean success = locker.lock();
             if (success) {
                 logger.info("Workstation locked successfully via User32 API");
             } else {

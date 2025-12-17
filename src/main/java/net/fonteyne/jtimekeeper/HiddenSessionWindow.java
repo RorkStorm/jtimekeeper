@@ -3,6 +3,7 @@ package net.fonteyne.jtimekeeper;
 
 import com.sun.jna.WString;
 import com.sun.jna.platform.win32.Kernel32;
+import com.sun.jna.platform.win32.User32;
 import com.sun.jna.platform.win32.WinDef.HMODULE;
 import com.sun.jna.platform.win32.WinDef.HWND;
 import com.sun.jna.platform.win32.WinDef.LRESULT;
@@ -65,6 +66,22 @@ public class HiddenSessionWindow implements WindowProc {
     private volatile HWND windowHandle;
     private final WString windowClassName = new WString(WINDOW_CLASS_NAME);
     private final ServiceHelper serviceHelper = new ServiceHelper();
+
+    private final Kernel32 kernel32;
+    private final User32 user32;
+    private final Wtsapi32 wtsapi32;
+
+    // Constructor for production use
+    public HiddenSessionWindow() {
+        this(Kernel32.INSTANCE, INSTANCE, Wtsapi32.INSTANCE);
+    }
+
+    // Constructor for testing (package-private)
+    HiddenSessionWindow(Kernel32 kernel32, User32 user32, Wtsapi32 wtsapi32) {
+        this.kernel32 = kernel32;
+        this.user32 = user32;
+        this.wtsapi32 = wtsapi32;
+    }
 
     /**
      * Checks if the message loop is currently running.
@@ -268,7 +285,7 @@ public class HiddenSessionWindow implements WindowProc {
      */
     private boolean registerWindowClass() {
         try {
-            HMODULE moduleHandle = Kernel32.INSTANCE.GetModuleHandle("");
+            HMODULE moduleHandle = kernel32.GetModuleHandle("");
             
             // Security: Validate module handle
             if (moduleHandle == null) {
@@ -317,7 +334,7 @@ public class HiddenSessionWindow implements WindowProc {
      */
     private boolean createHiddenWindow() {
         try {
-            HMODULE moduleHandle = Kernel32.INSTANCE.GetModuleHandle("");
+            HMODULE moduleHandle = kernel32.GetModuleHandle("");
             
             // Security: Validate module handle
             if (moduleHandle == null) {

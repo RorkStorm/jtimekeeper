@@ -317,7 +317,7 @@ public class ServiceHelper {
         // Only allow logout for configured users
         boolean success = false;
         try {
-            success = WindowsUserManager.forceLogout(sessionId, true);
+            success = WindowsUserManager.forceLogout();
         } catch (Exception ex) {
             logger.error("Error during logout for user {}: {}", username, ex.getMessage(), ex);
         }
